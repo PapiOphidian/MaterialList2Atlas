@@ -49,6 +49,7 @@ const normalTypes = new Set(["Normal", "DetailNormal"]); // Used for distinguish
 
 // Main
 ;(async () => {
+	if (!fs.existsSync(outputDir)) await fs.promises.mkdir(outputDir);
 	for (const slot of allPossibleSlots) { // pre process shared materials
 		for (const sharedMat of Object.keys(shared)) {
 			if (!atlasDesc.objects[sharedMat]) continue;
