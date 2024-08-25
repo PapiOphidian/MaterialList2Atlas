@@ -1,0 +1,12 @@
+{
+	"mat3": {
+		"Albedo": "set1 > mat1 > Albedo (0, 255, 0) [1, 1, 0, 0]",
+		"Normal": "/textures/norm3.png (1) [1, 1, 0, 0]",
+		"AO": "set1 > mat1 > AO (255, 255, 255) [1, 1, 0, 0]",
+		"Met": "/textures/metallic3.png (255, 255, 255) [1, 1, 0, 0]",
+		"Spec": "/textures/specular3.png (255, 255, 255) [1, 1, 0, 0]",
+		"DetailAlbedo": "/None (0, 0, 0) [1, 1, 0, 0]",
+		"DetailNormal": "/None (1) [1, 1, 0, 0]",
+		"DetailMask": "/None (0, 0, 0) [1, 1, 0, 0]"
+	}
+}

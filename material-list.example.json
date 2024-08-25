@@ -1,0 +1,27 @@
+{
+	"assets": "C:/Users/default/UnityProjects/TestProject/Assets",
+	"sets": {
+		"set1": {
+			"mat1": {
+				"Albedo": "/textures/tex1.png (255, 255, 255) [1, 1, 0, 0]",
+				"Normal": "/textures/norm1.png (1) [1, 1, 0, 0]",
+				"AO": "/textures/ao1.png (255, 255, 255) [1, 1, 0, 0]",
+				"Met": "/textures/metallic1.png (255, 255, 255) [1, 1, 0, 0]",
+				"Spec": "/textures/specular1.png (255, 255, 255) [1, 1, 0, 0]",
+				"DetailAlbedo": "/None (0, 0, 0) [1, 1, 0, 0]",
+				"DetailNormal": "/None (1) [1, 1, 0, 0]",
+				"DetailMask": "/None (0, 0, 0) [1, 1, 0, 0]"
+			},
+			"mat2": {
+				"Albedo": "set1 > mat1 > Albedo (255, 0, 0) [1, 1, 0, 0] {GR:RG}",
+				"Normal": "/textures/norm2.png (1) [1, 1, 0, 0]",
+				"AO": "set1 > mat1 > AO (255, 255, 255) [1, 1, 0, 0]",
+				"Met": "/textures/metallic2.png (255, 255, 255) [1, 1, 0, 0]",
+				"Spec": "/textures/specular2.png (255, 255, 255) [1, 1, 0, 0]",
+				"DetailAlbedo": "/None (0, 0, 0) [1, 1, 0, 0]",
+				"DetailNormal": "/None (1) [1, 1, 0, 0]",
+				"DetailMask": "/None (0, 0, 0) [1, 1, 0, 0]"
+			}
+		}
+	}
+}
