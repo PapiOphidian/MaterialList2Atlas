@@ -42,14 +42,20 @@ Making something that would work for any Unity shader would probably be impossib
 
 ## Default values for material slots
 tint: RGB(255, 255, 255)
+
 bump scale: (1)
+
 tile/offset: (1, 1, 0, 0) which equates to the image taking up the full canvas as normal and not being offset in either the x or y axis
+
 swizzle: {} Swizzle is for remapping channels to others. Swizzle works for all source textures. You can remap Green to the Red channel by putting {G:R} Unless channels are remapped, they'll keep their original values. Swizzle supports all channels on either side of the : even at the same time {RGBA:ABGR} works and would flip all of the channels.
 
 ## Texture packing
 Metallic, Ambient Occlusion and Specular are packed post processing.
+
 Metallic -> R
+
 AO -> G
+
 Specular -> A
 
 B currently isn't used by me but is typically used for height maps. I can add it in if you ask me nicely.
