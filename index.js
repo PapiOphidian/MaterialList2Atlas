@@ -3,6 +3,8 @@ const path = require("path");
 
 const Canvas = require("canvas");
 
+const lib = require("./lib");
+
 /** @type {AtlasDescriptor} */
 // @ts-ignore File will be there or else
 const atlasDesc = require("./atlas-description.json");
@@ -28,31 +30,49 @@ const floatRS = floatR.toString().slice(1, -1); // RegExp.toString includes the 
 const intRS = intR.toString().slice(1, -1);
 const pathRS = pathR.toString().slice(1, -1);
 
-const rgbOrBumpScaleR = new RegExp(`\\((${floatRS}),? ?(${intRS})?,? ?(${intRS})?\\)`); // first is shared with getting the normal scale
+const rgbiOrBumpScaleR = new RegExp(`\\((${floatRS}),? ?(${intRS})?,? ?(${intRS})?,? ?(${floatRS})?\\)`); // first is shared with getting the normal scale
 const tileOffsetR = new RegExp(`\\[(${floatRS}), ?(${floatRS}), ?(${floatRS}), ?(${floatRS})\\]`);
 const swizzleR = /{([RGBA]{1,4}):([RGBA]{1,4})}/;
-const rgbOrBumpScaleRS = rgbOrBumpScaleR.toString().slice(1, -1);
+const rgbiOrBumpScaleRS = rgbiOrBumpScaleR.toString().slice(1, -1);
 const tileOffsetRS = tileOffsetR.toString().slice(1, -1);
 const swizzleRS = swizzleR.toString().slice(1, -1);
 
-const pathAndOptionsRegex = new RegExp(`^(${pathRS}) ?(?:${rgbOrBumpScaleRS})? ?(?:${tileOffsetRS})? ?(?:${swizzleRS})?$`); // Also includes /None
-const referenceAndOptionsRegex = new RegExp(`^([\\w ]+) ?> ?([\\w ]+) ?> ?([\\w ]+) ?(?:${rgbOrBumpScaleRS})? ?(?:${tileOffsetRS})? ?(?:${swizzleRS})?$`);
+const pathAndOptionsRegex = new RegExp(`^(${pathRS}) ?(?:${rgbiOrBumpScaleRS})? ?(?:${tileOffsetRS})? ?(?:${swizzleRS})?$`); // Also includes /None
+const referenceAndOptionsRegex = new RegExp(`^([\\w ]+) ?> ?([\\w ]+) ?> ?([\\w ]+) ?(?:${rgbiOrBumpScaleRS})? ?(?:${tileOffsetRS})? ?(?:${swizzleRS})?$`);
+const maskRegex = /^(\w+)Mask$/;
 
 // console.log(pathAndOptionsRegex.toString() + "\n", referenceAndOptionsRegex.toString());
 
-const normalDefaultRGB = [128, 128, 255];
-
-/** @type {Array<keyof Material>} */
-const allPossibleSlots = ["Albedo", "Normal", "DetailMask", "DetailAlbedo", "DetailNormal", "AO", "Met", "Spec"]; // I could accumulate this at runtime but like lmao why
-const normalTypes = new Set(["Normal", "DetailNormal"]); // Used for distinguishing if the tint should go to bump scale mode and also how tint/bump scale path branches
+/** @type {Array<string>} */
+const allPossibleSlots = Object.keys(materials.sets).reduce((acc, cur) => {
+	for (const mat of Object.values(materials.sets[cur])) {
+		// @ts-expect-error Complaining about how acc is Array<never>
+		acc.push(...Object.keys(mat).filter(k => acc.indexOf(k) === -1));
+	}
+	return acc;
+}, []);
+for (const mat of Object.values(shared)) {
+	allPossibleSlots.push(...Object.keys(mat).filter(k => allPossibleSlots.indexOf(k) === -1));
+}
+/** @type {Array<[string, string]>} */
+const toMask = [];
+for (const slot of allPossibleSlots) {
+	const match = maskRegex.exec(slot);
+	if (!match) continue;
+	if (allPossibleSlots.includes(match[1])) toMask.push([slot, match[1]]);
+}
 
 
 // Main
 ;(async () => {
 	if (!fs.existsSync(outputDir)) await fs.promises.mkdir(outputDir);
+	const children = await fs.promises.readdir(outputDir);
+	await Promise.all(children.map(c => fs.promises.rm(path.join(outputDir, c), { recursive: true })));
+
 	for (const slot of allPossibleSlots) { // pre process shared materials
 		for (const sharedMat of Object.keys(shared)) {
 			if (!atlasDesc.objects[sharedMat]) continue;
+			if (!shared[sharedMat][slot]) continue;
 			const processed = await processSlot("Shared", sharedMat, slot);
 			cache.set(`${sharedMat}-${slot}`, processed);
 		}
@@ -62,9 +82,17 @@ const normalTypes = new Set(["Normal", "DetailNormal"]); // Used for distinguish
 		for (const slot of allPossibleSlots) { // get all of same slots of each material per set processed before moving on to next slot type
 			const atlas = Canvas.createCanvas(atlasDesc.size, atlasDesc.size).getContext("2d");
 
+			if (atlasDesc.normals.includes(slot)) { // Fill in the normal map with the default normal RGB and then composite additional maps on top
+				const oldFillStyle = atlas.fillStyle;
+				atlas.fillStyle = `rgb(${lib.normalDefaultRGB.join(",")})`;
+				atlas.fillRect(0, 0, atlas.canvas.width, atlas.canvas.height);
+				atlas.fillStyle = oldFillStyle;
+			}
+
 			for (const sharedMat of Object.keys(shared)) { // draw shared slots to the set atlas first
 				const atlasMatDef = atlasDesc.objects[sharedMat];
 				if (!atlasMatDef) continue;
+				if (!shared[sharedMat][slot]) continue;
 
 				const result = cache.get(`${sharedMat}-${slot}`);
 				if (!result) continue;
@@ -78,6 +106,7 @@ const normalTypes = new Set(["Normal", "DetailNormal"]); // Used for distinguish
 					console.warn(`${material} isn't defined in the atlas descriptor. Skipping`);
 					continue;
 				}
+				if (!materials.sets[set][material]?.[slot]) continue;
 
 				const result = await processSlot(set, material, slot);
 				atlas.drawImage(result.canvas, atlasMatDef.x, atlasMatDef.y);
@@ -86,30 +115,48 @@ const normalTypes = new Set(["Normal", "DetailNormal"]); // Used for distinguish
 			await fs.promises.writeFile(path.join(outputDir, `${set}-${slot.toLowerCase()}.png`), atlas.canvas.toBuffer("image/png"));
 		}
 
+		for (const [mask, base] of toMask) {
+			const [maskI, baseI] = await Promise.all([
+				Canvas.loadImage(path.join(outputDir, `${set}-${mask.toLowerCase()}.png`)).then(lib.image2Context).catch(() => void 0),
+				Canvas.loadImage(path.join(outputDir, `${set}-${base.toLowerCase()}.png`)).then(lib.image2Context).catch(() => void 0)
+			]);
+
+			if (maskI && baseI) {
+				const rgb = baseI.getImageData(0, 0, baseI.canvas.width, baseI.canvas.height);
+				const a = maskI.getImageData(0, 0, maskI.canvas.width, maskI.canvas.height);
+
+				for (let i = 0; i < rgb.data.length; i += 4) {
+					rgb.data[i + 3] = a.data[i]; // From Mask R
+				}
+
+				baseI.putImageData(rgb, 0, 0);
+				await fs.promises.writeFile(path.join(outputDir, `${set}-${base.toLowerCase()}-masked.png`), baseI.canvas.toBuffer("image/png"));
+			}
+		}
+
+
 		// post processing for packing maps
 		const [packR, packG, packA] = await Promise.all([
-			Canvas.loadImage(path.join(outputDir, `${set}-met.png`)).then(image2Context),
-			Canvas.loadImage(path.join(outputDir, `${set}-ao.png`)).then(image2Context),
-			Canvas.loadImage(path.join(outputDir, `${set}-spec.png`)).then(image2Context)
-		])
+			Canvas.loadImage(path.join(outputDir, `${set}-met.png`)).then(lib.image2Context).catch(() => void 0),
+			Canvas.loadImage(path.join(outputDir, `${set}-ao.png`)).then(lib.image2Context).catch(() => void 0),
+			Canvas.loadImage(path.join(outputDir, `${set}-spec.png`)).then(lib.image2Context).catch(() => void 0)
+		]);
 
-		if (!packR || !packG || !packA) throw new Error(`A slot deferred for packing isn't available\nR: ${!!packR}, G: ${!!packG}, A: ${!!packA}`);
-		if (packR.canvas.width !== packG.canvas.width || packR.canvas.width !== packA.canvas.width || packR.canvas.height !== packG.canvas.height || packR.canvas.height !== packA.canvas.height)
-			throw new Error(`The packed map widths or heights didn't match???`); // Realistically should never happen unless someone was really fast at editing the maps but users will find creative ways to break code
+		if (packR && packG && packA) {
+			const Rdata = packR.getImageData(0, 0, packR.canvas.width, packR.canvas.height);
+			const Gdata = packG.getImageData(0, 0, packG.canvas.width, packG.canvas.height);
+			const Adata = packA.getImageData(0, 0, packA.canvas.width, packA.canvas.height);
 
-		const Rdata = packR.getImageData(0, 0, packR.canvas.width, packR.canvas.height);
-		const Gdata = packG.getImageData(0, 0, packG.canvas.width, packG.canvas.height);
-		const Adata = packA.getImageData(0, 0, packA.canvas.width, packA.canvas.height);
-
-		for (let i = 0; i < Rdata.data.length; i += 4) {
-			// Metallic R is already there
-			// R 0, G 1, B 2, A 3
-			Rdata.data[i + 1] = Gdata.data[i + 1]; // From AO G
-			Rdata.data[i + 2] = 0; // B is empty
-			Rdata.data[i + 3] = Adata.data[i]; // From Alpha R
+			for (let i = 0; i < Rdata.data.length; i += 4) {
+				// Metallic R is already there
+				// R 0, G 1, B 2, A 3
+				Rdata.data[i + 1] = Gdata.data[i + 1]; // From AO G
+				Rdata.data[i + 2] = 0; // B is empty
+				Rdata.data[i + 3] = Adata.data[i]; // From Alpha R
+			}
+			packR.putImageData(Rdata, 0, 0);
+			await fs.promises.writeFile(path.join(outputDir, `${set}-packed.png`), packR.canvas.toBuffer("image/png"));
 		}
-		packR.putImageData(Rdata, 0, 0);
-		await fs.promises.writeFile(path.join(outputDir, `${set}-packed.png`), packR.canvas.toBuffer("image/png"));
 	}
 })();
 // End Main
@@ -119,7 +166,7 @@ const normalTypes = new Set(["Normal", "DetailNormal"]); // Used for distinguish
  *
  * @param {string} set
  * @param {string} material
- * @param {keyof Material} slot
+ * @param {string} slot
  * @returns {Promise<Canvas.CanvasRenderingContext2D>}
  */
 async function processSlot(set, material, slot) {
@@ -131,105 +178,34 @@ async function processSlot(set, material, slot) {
 	// Image loading
 	if (imagePath !== "/None") {
 		const absolute = path.join(materials.assets, imagePath);
-		const imageData = await Canvas.loadImage(absolute);
-		ctx = Canvas.createCanvas(imageData.width, imageData.height).getContext("2d");
-		ctx.drawImage(imageData, 0, 0);
+		ctx = await Canvas.loadImage(absolute).then(lib.image2Context);
 	} else {
 		ctx = Canvas.createCanvas(1, 1).getContext("2d");
-		ctx.putImageData(new Canvas.ImageData(normalTypes.has(slot) ? new Uint8ClampedArray([...normalDefaultRGB, 255]) : new Uint8ClampedArray([255, 255, 255, 255]), 1, 1), 0, 0);
+		ctx.putImageData(new Canvas.ImageData(atlasDesc.normals.includes(slot) ? new Uint8ClampedArray([...lib.normalDefaultRGB, 255]) : new Uint8ClampedArray([255, 255, 255, 255]), 1, 1), 0, 0);
 	}
 
 	// Tinting / BumpScale / Swizzle
-	if ((normalTypes.has(slot) && tint[0] !== 1) || (!normalTypes.has(slot) && (tint[0] !== 255 || tint[1] !== 255 || tint[2] !== 255)) || Object.keys(swizzle).length) {
+	if ((atlasDesc.normals.includes(slot) && tint[0] !== 1) || (!atlasDesc.normals.includes(slot) && (tint[0] !== 255 || tint[1] !== 255 || tint[2] !== 255 || tint[3] !== 1)) || (swizzle["R"] !== "R" || swizzle["G"] !== "G" || swizzle["B"] !== "B" || swizzle["A"] !== "A")) {
 		const data = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
 
 		for (let i = 0; i < data.data.length; i += 4) {
 			// Swizzle
-			const R = data.data[i];
-			const G = data.data[i + 1];
-			const B = data.data[i + 2];
-			const A = data.data[i + 3];
-			const swizzleMap = { R, G, B, A };
+			lib.swizzleFrame(data, swizzle, i);
 
-			for (const [source, dest] of Object.entries(swizzle)) {
-				switch (dest) { // The left side is going into the right side of the swizzle def: {G:R} means G -> R
-					case "R": data.data[i] = swizzleMap[source]; break;
-					case "G": data.data[i + 1] = swizzleMap[source]; break;
-					case "B": data.data[i + 2] = swizzleMap[source]; break;
-					case "A": data.data[i + 3] = swizzleMap[source]; break;
-					default: throw new Error("Oh, so we're doing other data channels now");
-				}
-			}
-
-			if (normalTypes.has(slot)) { // BumpScale
-				data.data[i] = clamp(0, 255, lerp(normalDefaultRGB[0], data.data[i], tint[0]));
-				data.data[i + 1] = clamp(0, 255, lerp(normalDefaultRGB[1], data.data[i + 1], tint[0]));
-				// leave the blue channel alone for _BumpScale
-			} else { // Tint
-				if (tint[0] < 0) data.data[i] = clamp(0, 255, lerp(data.data[i], 255 - data.data[i], tint2Mult(-tint[0])));
-				else data.data[i] = clamp(0, 255, Math.round(data.data[i] * tint2Mult(tint[0])));
-
-				if (tint[1] < 0) data.data[i + 1] = clamp(0, 255, lerp(data.data[i + 1], 255 - data.data[i + 1], tint2Mult(-tint[1])));
-				else data.data[i + 1] = clamp(0, 255, Math.round(data.data[i + 1] * tint2Mult(tint[1])));
-
-				if (tint[2] < 0) data.data[i + 2] = clamp(0, 255, lerp(data.data[i + 2], 255 - data.data[i + 2], tint2Mult(-tint[2])));
-				else data.data[i + 2] = clamp(0, 255, Math.round(data.data[i + 2] * tint2Mult(tint[2])));
-			}
+			if (atlasDesc.normals.includes(slot)) lib.bumpScaleFrame(data, tint[0], i);
+			else lib.tintFrame(data, tint[0], tint[1], tint[2], tint[3], i);
 		}
+
 		ctx.putImageData(data, 0, 0);
 	}
 
 	// Tiling
 	const sizeInAtlas = atlasDesc.objects[material].size;
-	if (tileOffset[0] !== 1 || tileOffset[1] !== 0) {
-		const sectionSizeX = Math.floor(sizeInAtlas / tileOffset[0]); // How many times the x and y can fit into the size in atlas in pixels
-		const sectionSizeY = Math.floor(sizeInAtlas / tileOffset[1]); // Will be either on point or a little under. Resize after to fit
-
-		resize(ctx, sectionSizeX, sectionSizeY);
-		const partInAtlas = Canvas.createCanvas(sectionSizeX * tileOffset[0], sectionSizeY * tileOffset[1]).getContext("2d"); // this is to resize to sizeInAtlas later
-		const data2 = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height); // get the part to put into the partInAtlas
-		for (let y = 0; y < tileOffset[1]; y++) {
-			for (let x = 0; x < tileOffset[0]; x++) {
-				partInAtlas.putImageData(data2, x * sectionSizeX, y * sectionSizeY);
-			}
-		}
-
-		ctx.canvas.width = sizeInAtlas;
-		ctx.canvas.height = sizeInAtlas;
-		ctx.drawImage(partInAtlas.canvas, 0, 0, sizeInAtlas, sizeInAtlas);
-	} else resize(ctx, sizeInAtlas, sizeInAtlas);
+	if (tileOffset[0] !== 1 || tileOffset[1] !== 0) lib.tile(ctx, tileOffset[0], tileOffset[1], sizeInAtlas);
+	else lib.resize(ctx, sizeInAtlas, sizeInAtlas);
 
 	// Offset
-	const normalizedX = tileOffset[2] % 1;
-	const normalizedY = tileOffset[3] % 1;
-	const xIsNeg = normalizedX < 0;
-	const yIsNeg = normalizedY < 0;
-	const shiftAmountX = normalizedX ? Math.round(sizeInAtlas * ((xIsNeg ? 1 + normalizedX : normalizedX))) : 0;
-	const shiftAmountY = normalizedY ? Math.round(sizeInAtlas * ((yIsNeg ? 1 + normalizedY : normalizedY))) : 0;
-
-	if (normalizedX !== 0 && normalizedY === 0) {
-		const right = ctx.getImageData(sizeInAtlas - shiftAmountX, 0, shiftAmountX, sizeInAtlas); // to left
-		const left = ctx.getImageData(0, 0, sizeInAtlas - shiftAmountX, sizeInAtlas); // to right
-
-		ctx.putImageData(left, shiftAmountX, 0);
-		ctx.putImageData(right, 0, 0);
-	} else if (normalizedX === 0 && normalizedY !== 0) {
-		const bottom = ctx.getImageData(0, sizeInAtlas - shiftAmountY, sizeInAtlas, shiftAmountY); // to top
-		const top = ctx.getImageData(0, 0, sizeInAtlas, sizeInAtlas - shiftAmountY); // to bottom
-
-		ctx.putImageData(top, 0, shiftAmountY);
-		ctx.putImageData(bottom, 0, 0);
-	} else if (normalizedX !== 0 && normalizedY !== 0) {
-		const bottomRight = ctx.getImageData(sizeInAtlas - shiftAmountX, sizeInAtlas - shiftAmountY, shiftAmountX, shiftAmountY); // to top left
-		const bottomLeft = ctx.getImageData(0, sizeInAtlas - shiftAmountY, sizeInAtlas - shiftAmountX, sizeInAtlas - shiftAmountY); // to top right
-		const topRight = ctx.getImageData(sizeInAtlas - shiftAmountX, 0, shiftAmountX, sizeInAtlas - shiftAmountY); // to bottom left
-		const topLeft = ctx.getImageData(0, 0, sizeInAtlas - shiftAmountX, sizeInAtlas - shiftAmountY); // to bottom right
-
-		ctx.putImageData(topLeft, shiftAmountX, shiftAmountY);
-		ctx.putImageData(topRight, 0, shiftAmountY);
-		ctx.putImageData(bottomLeft, shiftAmountX, 0);
-		ctx.putImageData(bottomRight, 0, 0);
-	}
+	lib.offset(ctx, tileOffset[2], tileOffset[3])
 
 	console.log(`Done with drawing ${slot} from ${set} > ${material}`);
 
@@ -239,8 +215,8 @@ async function processSlot(set, material, slot) {
 /**
  * @param {string} set
  * @param {string} material
- * @param {keyof Material} slot
- * @returns {{ imagePath: string; tint: [number, number, number], tileOffset: [number, number, number, number], swizzle: { [channel: "R" | "G" | "B" | "A"]: "R" | "G" | "B" | "A" } }}
+ * @param {string} slot
+ * @returns {{ imagePath: string; tint: [number, number, number, number], tileOffset: [number, number, number, number], swizzle: Record<lib.Channel, lib.Channel> }}
  */
 function resolveOptions(set, material, slot) {
 	const mats = set === "Shared" ? shared : materials.sets[set];
@@ -249,11 +225,11 @@ function resolveOptions(set, material, slot) {
 
 	/** @type {string | undefined} */
 	let imagePath,
-	/** @type {[number, number, number] | undefined} */
+	/** @type {[number, number, number, number] | undefined} */
 	tint,
 	/** @type {[number, number, number, number] | undefined} */
 	tileOffset,
-	/** @type {{ [channel: string]: string } | undefined} */
+	/** @type {Record<lib.Channel, lib.Channel> | undefined} */
 	swizzle;
 
 	/** @param {string} pt */
@@ -261,15 +237,17 @@ function resolveOptions(set, material, slot) {
 		const match = pathAndOptionsRegex.exec(pt);
 		if (!match) throw new Error(`Reference didn't match path regex even though the first char was a /\n${pt}`);
 		imagePath = match[1].trim();
-		tint = match[2] ? [Number(match[2]), 255, 255] : [normalTypes.has(slot) ? 1 : 255, 255, 255];
+		tint = match[2] ? [Number(match[2]), 255, 255, 1] : [atlasDesc.normals.includes(slot) ? 1 : 255, 255, 255, 1];
 		if (match[3]) tint[1] = Number(match[3]);
 		if (match[4]) tint[2] = Number(match[4]);
-		tileOffset = match[5] ? [Number(match[5]), Number(match[6]), Number(match[7]), Number(match[8])] : [1, 1, 0, 0];
-		swizzle = {}
-		if (match[9]) {
-			if (match[9].length !== match[10].length) throw new Error(`Swizzle lengths don't match for ${set} > ${material} > ${slot}`);
-			const leftSplit = match[9].split("");
-			const rightSplit = match[10].split("");
+		if (match[5]) tint[3] = Number(match[5]);
+
+		tileOffset = match[6] ? [Number(match[6]), Number(match[7]), Number(match[8]), Number(match[9])] : [1, 1, 0, 0];
+		swizzle = { R: "R", B: "B", G: "G", A: "A" }
+		if (match[10]) {
+			if (match[10].length !== match[11].length) throw new Error(`Swizzle lengths don't match for ${set} > ${material} > ${slot}`);
+			const leftSplit = match[10].split("");
+			const rightSplit = match[11].split("");
 			for (let i = 0; i < leftSplit.length; i++) {
 				swizzle[leftSplit[i]] = rightSplit[i];
 			}
@@ -295,29 +273,31 @@ function resolveOptions(set, material, slot) {
 		if (!foundSlot.startsWith("/")) throw new Error(`References cannot contain references. They must be a path. Error originated from ${set} > ${material} > ${slot} which points to ${refSet} > ${refMat} > ${refSlot}`);
 		resolvePath(foundSlot);
 
-		/** @type {[number, number, number] | undefined} */
-		const overrideTint = match[4] ? [Number(match[4]), 255, 255] : undefined;
+		/** @type {[number, number, number, number] | undefined} */
+		const overrideTint = match[4] ? [Number(match[4]), 255, 255, 1] : undefined;
 		if (overrideTint) {
 			tint = overrideTint;
 			if (match[5]) tint[1] = Number(match[5]);
 			if (match[6]) tint[2] = Number(match[6]);
+			if (match[7]) tint[3] = Number(match[7]);
 		}
 
 		/** @type {[number, number, number, number] | undefined} */
-		const overrideTileOffset = match[7] ? [Number(match[7]), 1, 0, 0] : undefined;
+		const overrideTileOffset = match[8] ? [Number(match[8]), 1, 0, 0] : undefined;
 		if (overrideTileOffset) {
 			tileOffset = overrideTileOffset;
-			if (match[8]) tileOffset[1] = Number(match[8]);
-			if (match[9]) tileOffset[2] = Number(match[9]);
-			if (match[10]) tileOffset[3] = Number(match[10]);
+			if (match[9]) tileOffset[1] = Number(match[9]);
+			if (match[10]) tileOffset[2] = Number(match[10]);
+			if (match[11]) tileOffset[3] = Number(match[11]);
 		}
 
-		const overrideSwizzle = match[11] && match[12] ? {} : undefined;
+		/** @type {Record<lib.Channel, lib.Channel> | undefined} */
+		const overrideSwizzle = match[12] && match[13] ? { R: "R", B: "B", G: "G", A: "A" } : undefined;
 		if (overrideSwizzle) {
-			if (match[11].length !== match[12].length) throw new Error(`Override swizzle lengths defined in ${set} > ${material} > ${slot} are not the same`)
+			if (match[12].length !== match[13].length) throw new Error(`Override swizzle lengths defined in ${set} > ${material} > ${slot} are not the same`);
 			swizzle = overrideSwizzle;
-			const leftSplit = match[11].split("");
-			const rightSplit = match[12].split("");
+			const leftSplit = match[12].split("");
+			const rightSplit = match[13].split("");
 			for (let i = 0; i < leftSplit.length; i++) {
 				swizzle[leftSplit[i]] = rightSplit[i];
 			}
@@ -329,56 +309,9 @@ function resolveOptions(set, material, slot) {
 	return { imagePath, tint, tileOffset, swizzle }
 }
 
-/**
- * @param {number} tint
- */
-function tint2Mult(tint) {
-	return tint > 0 ? tint / 255 : 0;
-}
 
-/**
- * @param {number} a
- * @param {number} b
- * @param {number} t
- */
-function lerp(a, b, t) {
-	return a + (b - a) * t;
-}
+// Types
 
-/**
- * @param {number} min
- * @param {number} max
- * @param {number} val
- */
-function clamp(min, max, val) {
-	if (val < min) return min;
-	if (val > max) return max;
-	return val;
-}
-
-/**
- * @param {Canvas.CanvasRenderingContext2D} ctx
- * @param {number} newX
- * @param {number} newY
- */
-function resize(ctx, newX, newY) {
-	const oldX = ctx.canvas.width;
-	const oldY = ctx.canvas.height;
-	const data = ctx.getImageData(0, 0, oldX, oldY);
-
-	const newCanvas = Canvas.createCanvas(oldX, oldY).getContext("2d");
-	newCanvas.putImageData(data, 0, 0);
-	ctx.canvas.width = newX;
-	ctx.canvas.height = newY;
-	ctx.drawImage(newCanvas.canvas, 0, 0, newX, newY);
-}
-
-/** @param {Canvas.Image} img */
-function image2Context(img) {
-	const ctx = Canvas.createCanvas(img.width, img.height).getContext("2d");
-	ctx.drawImage(img, 0, 0);
-	return ctx;
-}
 
 /**
  * @typedef {{
@@ -393,14 +326,7 @@ function image2Context(img) {
 
 /**
  * @typedef {{
- * 	"Albedo": string;
- * 	"Normal": string;
- * 	"AO": string;
- * 	"Met": string;
- * 	"Spec": string;
- * 	"DetailAlbedo": string;
- * 	"DetailNormal": string;
- * 	"DetailMask": string;
+ * 	[slot: string]: string;
  * }} Material
  *
  * Albedo: path (R, G, B)? [TileX, TileY, OffsetX, OffsetY]? OR Set > Material > Slot (R, G, B)? [TileX, TileY, OffsetX, OffsetY]?
@@ -417,6 +343,7 @@ function image2Context(img) {
 /**
  * @typedef {{
  * 	"size": number;
+ * 	"normals": Array<string>;
  * 	"objects": {
  * 		[material: string]: MaterialAtlasInfo
  * 	}

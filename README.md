@@ -41,7 +41,7 @@ No I don't since this is kinda engine agonistic (kinda) and every shader has wil
 Making something that would work for any Unity shader would probably be impossible/impractical anyways.
 
 ## Default values for material slots
-tint: RGB(255, 255, 255)
+tint: RGBI(255, 255, 255, 1) // Supports HDR colors with intensity
 
 bump scale: (1)
 
@@ -51,16 +51,24 @@ swizzle: {} Swizzle is for remapping channels to others. Swizzle works for all s
 
 ## Texture packing
 Metallic, Ambient Occlusion and Specular are packed post processing.
+A naming scheme is required in order for the program to pack for you;
+
+Met, Spec, AO (case insensitive)
+
+Channels:
 
 Metallic -> R
 
-AO -> G
+Ambient Occlusion -> G
 
 Specular -> A
 
 B currently isn't used by me but is typically used for height maps. I can add it in if you ask me nicely.
 
 You cannot swizzle the packed map in program. You'll have to do that yourself.
+
+## Texture masking
+Any slot that ends in "Mask" will search for a material slot without the "Mask" part and attempt to put the Mask's R channel into the base's A channel
 
 ## You did something wrong!
 Either make an issue or a PR and we'll work things out. I promise I'm trying my best here!

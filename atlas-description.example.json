@@ -1,5 +1,6 @@
 {
 	"size": 8192,
+	"normals": ["Normal", "DetailNormal"],
 	"objects": {
 		"mat1": {
 			"size": 4096,
