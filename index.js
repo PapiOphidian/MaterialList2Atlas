@@ -5,15 +5,15 @@ const Canvas = require("canvas");
 
 const lib = require("./lib");
 
-/** @type {AtlasDescriptor} */
+/** @type {import("./types").AtlasDescriptor} */
 // @ts-ignore File will be there or else
 const atlasDesc = require("./atlas-description.json");
 
-/** @type {MaterialList} */
+/** @type {import("./types").MaterialList} */
 // @ts-ignore File will be there or else
 const materials = require("./material-list.json");
 
-/** @type {{ [material: string]: Material }} */
+/** @type {{ [material: string]: import("./types").Material }} */
 // @ts-ignore File will be there or else
 const shared = require("./shared-materials.json");
 
@@ -308,52 +308,3 @@ function resolveOptions(set, material, slot) {
 
 	return { imagePath, tint, tileOffset, swizzle }
 }
-
-
-// Types
-
-
-/**
- * @typedef {{
- * 	"assets": string;
- * 	"sets": {
- * 		[set: string]: {
- * 			[material: string]: Material;
- * 		};
- * 	};
- * }} MaterialList
- */
-
-/**
- * @typedef {{
- * 	[slot: string]: string;
- * }} Material
- *
- * Albedo: path (R, G, B)? [TileX, TileY, OffsetX, OffsetY]? OR Set > Material > Slot (R, G, B)? [TileX, TileY, OffsetX, OffsetY]?
- *
- * Normal: path (scale)? [TileX, TileY, OffsetX, OffsetY]? OR Set > Material > Slot (Scale)? [TileX, TileY, OffsetX, OffsetY]?
- *
- * AO: path [TileX, TileY, OffsetX, OffsetY]? OR Set > Material > Slot [TileX, TileY, OffsetX, OffsetY]?
- *
- * Met: path [TileX, TileY, OffsetX, OffsetY]? OR Set > Material > Slot [TileX, TileY, OffsetX, OffsetY]?
- *
- * Spec: path [TileX, TileY, OffsetX, OffsetY]? OR Set > Material > Slot [TileX, TileY, OffsetX, OffsetY]?
- */
-
-/**
- * @typedef {{
- * 	"size": number;
- * 	"normals": Array<string>;
- * 	"objects": {
- * 		[material: string]: MaterialAtlasInfo
- * 	}
- * }} AtlasDescriptor
- */
-
-/**
- * @typedef {{
- * 	"size": number;
- * 	"x": number;
- * 	"y": number;
- * }} MaterialAtlasInfo
- */
